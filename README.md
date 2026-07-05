@@ -120,6 +120,13 @@ proto=SIRC addr=0x01 cmd=0x15
 
 ---
 
+## TODO
+```
+1. Faster load timer
+2. Fix issue with icons not loading
+3. Fix spacing.
+```
+
 ## Disclaimer
 
 For use on devices you own. IR brute forcing takes time — Full Sweep at 400ms per signal is ~7.3 hours for all 65,536 combinations. Use category scans first.

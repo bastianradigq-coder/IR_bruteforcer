@@ -125,6 +125,7 @@ proto=SIRC addr=0x01 cmd=0x15
 1. Faster load timer
 2. Fix issue with icons not loading
 3. Fix spacing.
+4. Speed
 ```
 
 ## Disclaimer

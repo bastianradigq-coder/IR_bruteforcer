@@ -16,7 +16,6 @@ extern const Icon I_btn_ok_11x11;
 extern const Icon I_btn_right_6x11;
 
 // ── Timing ────────────────────────────────────────────────────────────────────
-#define SEND_DELAY_MS     300
 #define POST_TX_DELAY_MS  100
 #define LOG_PATH          APP_DATA_PATH("ir_hits.txt")
 #define RECENT_MAX        5
@@ -164,6 +163,8 @@ typedef struct {
     ScanState scan_state;
     Protocol  scan_proto;
     bool      scan_proto_editing;
+    uint16_t  delay_ms;            // Konfigurierbare Verzögerung in ms
+    bool      scan_delay_editing;  // Modus zum Editieren der Verzögerung
     uint8_t   scan_cursor;
     uint8_t   addr, cmd;
     uint32_t  list_idx;
@@ -326,14 +327,24 @@ static void draw_cb(Canvas* canvas,void* ctx){
         canvas_draw_line(canvas,0,13,128,13);
         canvas_set_font(canvas,FontSecondary);
 
+        // Protocol Box
         char pbuf[12]; snprintf(pbuf,sizeof(pbuf),"%s",PROTO_NAMES[app->scan_proto]);
         if(app->scan_cursor==0){
-            canvas_draw_box(canvas,2,15,44,11); canvas_invert_color(canvas);
+            canvas_draw_box(canvas,2,15,36,11); canvas_invert_color(canvas);
             canvas_draw_str(canvas,4,24,pbuf); canvas_invert_color(canvas);
         } else canvas_draw_str(canvas,2,24,pbuf);
 
+        // Delay Box
+        char dbuf[12]; snprintf(dbuf,sizeof(dbuf),"%dms",app->delay_ms);
+        if(app->scan_cursor==1){
+            canvas_draw_box(canvas,40,15,36,11); canvas_invert_color(canvas);
+            canvas_draw_str(canvas,42,24,dbuf); canvas_invert_color(canvas);
+            if(app->scan_delay_editing) canvas_draw_str(canvas,72,24,"*");
+        } else canvas_draw_str(canvas,40,24,dbuf);
+
+        // Addr/Cmd Anzeige
         char abuf[16]; snprintf(abuf,sizeof(abuf),"A:%02X C:%02X",app->addr,app->cmd);
-        canvas_draw_str(canvas,52,24,abuf);
+        canvas_draw_str(canvas,78,24,abuf);
 
         uint32_t total,cur;
         if(app->scan_mode==ModeFull){total=65536;cur=(uint32_t)app->addr*256+app->cmd;}
@@ -346,7 +357,7 @@ static void draw_cb(Canvas* canvas,void* ctx){
         const char* btn=app->scan_state==StateRunning?"Pause":
                         app->scan_state==StatePaused?"Resume":
                         app->scan_state==StateDone?"Restart":"Start";
-        if(app->scan_cursor==1){
+        if(app->scan_cursor==2){
             canvas_draw_box(canvas,2,38,44,11); canvas_invert_color(canvas);
             canvas_draw_str(canvas,4,47,btn); canvas_invert_color(canvas);
         } else canvas_draw_str(canvas,4,47,btn);
@@ -354,7 +365,7 @@ static void draw_cb(Canvas* canvas,void* ctx){
         if(app->recent_count>0){char rb[12];snprintf(rb,sizeof(rb),"Hits:%d",app->recent_count);canvas_draw_str(canvas,80,47,rb);}
 
         { int x=2;
-          if(app->scan_proto_editing){
+          if(app->scan_proto_editing || app->scan_delay_editing){
               x=hint(canvas,x,52,&I_arrow_updown_11x11,"change");
               hint(canvas,x,52,&I_btn_ok_11x11,"done");
           } else {
@@ -388,6 +399,7 @@ int32_t ir_bruteforce_app(void* p){
     App* app=malloc(sizeof(App));
     memset(app,0,sizeof(App));
     app->screen=ScreenMain; app->scan_state=StateDone; app->scan_proto=ProtoNEC;
+    app->delay_ms=300; // Standard-Verzögerung 300 ms
     app->mutex=furi_mutex_alloc(FuriMutexTypeNormal);
     app->queue=furi_message_queue_alloc(8,sizeof(InputEvent));
     app->notif=furi_record_open(RECORD_NOTIFICATION);
@@ -413,7 +425,7 @@ int32_t ir_bruteforce_app(void* p){
                         if(app->menu_sel==0){
                             app->screen=ScreenScan; app->scan_mode=ModeFull;
                             app->scan_proto=ProtoNEC; app->scan_state=StateReady;
-                            app->scan_proto_editing=false; app->scan_cursor=0;
+                            app->scan_proto_editing=false; app->scan_delay_editing=false; app->scan_cursor=0;
                             app->addr=0; app->cmd=0;
                         } else if(app->menu_sel==6){
                             app->screen=ScreenCustom; app->custom_cursor=0; app->custom_editing=false;
@@ -425,7 +437,7 @@ int32_t ir_bruteforce_app(void* p){
                             // 1=TV 2=LED 3=Toy 4=RC 5=Stream → ScanMode 0-4
                             app->screen=ScreenScan; app->scan_mode=(ScanMode)(app->menu_sel-1);
                             app->scan_proto=ProtoNEC; app->scan_state=StateReady;
-                            app->scan_proto_editing=false; app->scan_cursor=0; app->list_idx=0;
+                            app->scan_proto_editing=false; app->scan_delay_editing=false; app->scan_cursor=0; app->list_idx=0;
                         }
                     }
 
@@ -454,7 +466,7 @@ int32_t ir_bruteforce_app(void* p){
                                 app->custom_editing=false;
                                 app->screen=ScreenScan; app->scan_mode=ModeCustom;
                                 app->scan_proto=app->custom_proto; app->scan_proto_editing=false;
-                                app->scan_cursor=0; app->addr=app->custom_addr; app->cmd=0;
+                                app->scan_delay_editing=false; app->scan_cursor=0; app->addr=app->custom_addr; app->cmd=0;
                                 app->scan_state=StateReady;
                             }
                         }
@@ -486,13 +498,27 @@ int32_t ir_bruteforce_app(void* p){
                             app->scan_proto_editing=false;
                             if(app->scan_state==StatePaused) app->scan_state=StateRunning;
                         }
+                    } else if(app->scan_delay_editing){
+                        if(ev.key==InputKeyUp || ev.key==InputKeyRight){
+                            if(app->delay_ms <= 2950) app->delay_ms += 50;
+                        }
+                        if(ev.key==InputKeyDown || ev.key==InputKeyLeft){
+                            if(app->delay_ms >= 100) app->delay_ms -= 50;
+                        }
+                        if(ev.key==InputKeyOk || ev.key==InputKeyBack){
+                            app->scan_delay_editing=false;
+                            if(app->scan_state==StatePaused) app->scan_state=StateRunning;
+                        }
                     } else {
                         if(ev.key==InputKeyBack){ app->screen=ScreenMain; app->scan_state=StateDone; }
                         if(ev.key==InputKeyUp   && app->scan_cursor>0) app->scan_cursor--;
-                        if(ev.key==InputKeyDown && app->scan_cursor<1) app->scan_cursor++;
+                        if(ev.key==InputKeyDown && app->scan_cursor<2) app->scan_cursor++;
                         if(ev.key==InputKeyOk){
                             if(app->scan_cursor==0){
                                 app->scan_proto_editing=true;
+                                if(app->scan_state==StateRunning) app->scan_state=StatePaused;
+                            } else if(app->scan_cursor==1){
+                                app->scan_delay_editing=true;
                                 if(app->scan_state==StateRunning) app->scan_state=StatePaused;
                             } else {
                                 if(app->scan_state==StateReady||app->scan_state==StatePaused){
@@ -522,6 +548,7 @@ int32_t ir_bruteforce_app(void* p){
         furi_mutex_acquire(app->mutex,FuriWaitForever);
         bool run=(app->screen==ScreenScan&&app->scan_state==StateRunning);
         ScanMode sm=app->scan_mode; Protocol sp=app->scan_proto;
+        uint16_t delay_val=app->delay_ms;
         furi_mutex_release(app->mutex);
 
         if(run){
@@ -531,7 +558,7 @@ int32_t ir_bruteforce_app(void* p){
                 proto_send(sp,a,c);
                 furi_delay_ms(POST_TX_DELAY_MS);
                 notification_message(app->notif,&sequence_blink_cyan_10);
-                furi_delay_ms(SEND_DELAY_MS);
+                furi_delay_ms(delay_val);
                 furi_mutex_acquire(app->mutex,FuriWaitForever);
                 if(sm==ModeCustom){
                     if(app->cmd<0xFF) app->cmd++; else app->scan_state=StateDone;
@@ -552,7 +579,7 @@ int32_t ir_bruteforce_app(void* p){
                     furi_mutex_acquire(app->mutex,FuriWaitForever);
                     app->addr=list[idx].addr; app->cmd=list[idx].cmd; app->list_idx++;
                     furi_mutex_release(app->mutex);
-                    furi_delay_ms(SEND_DELAY_MS);
+                    furi_delay_ms(delay_val);
                 } else {
                     furi_mutex_acquire(app->mutex,FuriWaitForever);
                     app->scan_state=StateDone; furi_mutex_release(app->mutex);
